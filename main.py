@@ -2,6 +2,7 @@
 
 import http.server
 import io
+import os
 import re
 import requests
 import urllib.parse
@@ -20,8 +21,28 @@ SLIDE_SMALL_MARGIN_INCHES = 0.25
 COLUMN_MARGIN_INCHES = 0.1
 HEIGHT_MARGIN_INCHES = 0.1
 
-debug_logs = True
-debug_slide = True
+# Init configuration default values
+debug_logs = False
+debug_slides = False
+server_port = 8080
+
+# Parse configuration environment variables
+html2pptx_debug_logs = os.getenv('HTML2PPTX_DEBUG_LOGS', "false")
+html2pptx_debug_slides = os.getenv('HTML2PPTX_DEBUG_SLIDES', "false")
+html2pptx_server_port = os.getenv('HTML2PPTX_PORT', "8080")
+
+# Set configuration variables depending on environment variables
+if html2pptx_debug_logs.lower() == "true":
+    debug_logs = True
+if html2pptx_debug_slides.lower() == "true":
+    debug_slides = True
+server_port = int(html2pptx_server_port)
+
+# Print configuration
+print("Configuration:")
+print("debug_logs:", debug_logs)
+print("debug_slides:", debug_slides)
+print("server_port:", server_port)
 
 
 def html_to_pptx(url, css_selector):
@@ -271,7 +292,7 @@ def fill_slide(prs, slide):
         # Create the text box
         text_box = prs_slide.shapes.add_textbox(left, top, width, height)
 
-        if debug_slide:
+        if debug_slides:
             # Fill the shape with red in debug mode
             fill = text_box.fill
             fill.solid()
@@ -359,8 +380,8 @@ class Html2pptx(http.server.BaseHTTPRequestHandler):
         self.wfile.write(prs_bytes_stream.getvalue())
 
 
-PORT = 8080
-server_address = ("", PORT)
+# Setup and start HTTP server with custom Html2pptx handler
+server_address = ("", server_port)
 httpd = http.server.HTTPServer(server_address, Html2pptx)
-print("serving at port", PORT)
+print("Serving at port:", server_port)
 httpd.serve_forever()

@@ -96,77 +96,62 @@ def slides_to_pptx(slides):
     for slide in slides:
         if debug_logs:
             print("============================================ NEW SLIDE ============================================")
-        layout, number_of_images = get_slide_data_layout(slide)
-        fill_slide(prs, slide, layout, number_of_images)
+        fill_slide(prs, slide)
         if debug_logs:
             print("============================================ END SLIDE ============================================")
     prs.save('test.pptx')
 
 
-def get_slide_data_layout(slide):
-    with_images = False
-    number_of_images = 0
-    with_text_blocks = False
-    number_of_text_blocks = 0
-    longest_text_string = 0
-
+def fill_slide(prs, slide):
+    image_count = 0
+    max_chars_in_strings = 0
     for slide_data in slide:
         img_found = re.search("^img_src:(.*)$", slide_data)
         if img_found:
-            if not with_images:
-                with_images = True
-            number_of_images += 1
+            image_count += 1
         else:
-            if not with_text_blocks:
-                with_text_blocks = True
-            number_of_text_blocks += 1
-            if len(slide_data) > longest_text_string:
-                longest_text_string = len(slide_data)
-
-    if with_images and with_text_blocks:
-        if number_of_images > 1 and longest_text_string < 75:
-            return "images_with_columns", number_of_images
-        elif number_of_images > 1:
-            return "multiple_images_with_text", number_of_images
-        else:
-            return "one_image_with_text", number_of_images
-    elif not with_images and with_text_blocks:
-        if number_of_text_blocks == 1:
-            return "title", number_of_images
-        else:
-            return "text_only", number_of_images
-    elif with_images and not with_text_blocks:
-        if number_of_images > 1:
-            return "multiple_images", number_of_images
-        else:
-            return "one_image_only", number_of_images
-    else:
-        return "empty", number_of_images
-
-
-def fill_slide(prs, slide, layout, number_of_images):
-    if layout == "empty":
+            if len(slide_data) > max_chars_in_strings:
+                max_chars_in_strings = len(slide_data)
+    empty_slide = image_count == 0 and max_chars_in_strings == 0
+    if empty_slide:
         return
 
     prs_slide_layout = prs.slide_layouts[SLIDE_BLANK_LAYOUT]
     prs_slide = prs.slides.add_slide(prs_slide_layout)
 
-    if layout == "images_with_columns":
-        slide_fill_column_layout(prs_slide, slide, number_of_images)
-    else:
-        generic_slide_fill(prs_slide, slide)
+    with_multiple_images = image_count > 1
+    with_short_texts = max_chars_in_strings != 0 and max_chars_in_strings <= SHORT_TEXT_LIMIT_CHARS
+    column_layout = with_multiple_images and with_short_texts
 
-
-def generic_slide_fill(prs_slide, slide):
     images_array = []
     text_array = []
+    column_text_array = []
 
     for slide_data in slide:
         img_found = re.search("^img_src:(.*)$", slide_data)
-        if img_found:
-            images_array.append(img_found.group(1))
+        if column_layout:
+            if img_found:
+                if len(images_array) == 0 and len(column_text_array) > 0:
+                    images_array.append("empty")
+                    text_array.append(column_text_array)
+                    column_text_array = []
+                elif len(images_array) > 0:
+                    text_array.append(column_text_array)
+                    column_text_array = []
+                images_array.append(img_found.group(1))
+            else:
+                column_text_array.append(slide_data)
         else:
-            text_array.append(slide_data)
+            if img_found:
+                images_array.append(img_found.group(1))
+            else:
+                column_text_array.append(slide_data)
+
+    if column_layout:
+        text_array.append(column_text_array)
+    else:
+        if len(column_text_array) > 0:
+            text_array.append(column_text_array)
 
     column_margin_inches = 0.1
     height_margin_inches = 0.1
@@ -176,14 +161,18 @@ def generic_slide_fill(prs_slide, slide):
     if len(images_array) > 0:
         column_width_inches = available_slide_width_inches/len(images_array)
     max_image_height_inches = 0
-    current_img = 0
-    for img_link in images_array:
+    images_heights_inches = []
+
+    for index, img_link in enumerate(images_array):
         if debug_logs:
             print("IMAGE LINK:", img_link)
-        current_img += 1
+        if img_link == "empty":
+            images_heights_inches.append(0)
+            continue
+
         top = Inches(SLIDE_SMALL_MARGIN_INCHES)
-        left = Inches(SLIDE_SMALL_MARGIN_INCHES + (current_img - 1)*column_width_inches
-                      + (current_img - 1)*column_margin_inches)
+        left = Inches(SLIDE_SMALL_MARGIN_INCHES + index*column_width_inches
+                      + index*column_margin_inches)
 
         image_req = requests.get(img_link)
         img_bytes = io.BytesIO(image_req.content)
@@ -212,10 +201,11 @@ def generic_slide_fill(prs_slide, slide):
                     top_vertical_centered_inches = SLIDE_SMALL_MARGIN_INCHES
                 img_box.top = Inches(top_vertical_centered_inches)
 
+        images_heights_inches.append(img_box.height.inches)
         if img_box.height.inches > max_image_height_inches:
             max_image_height_inches = img_box.height.inches
 
-    if len(text_array) > 0:
+    for index, text_column in enumerate(text_array):
         left = Inches(SLIDE_SMALL_MARGIN_INCHES)
         width = Inches(SLIDE_WIDTH_INCHES - 2*SLIDE_SMALL_MARGIN_INCHES)
         top = Inches(SLIDE_SMALL_MARGIN_INCHES)
@@ -227,6 +217,15 @@ def generic_slide_fill(prs_slide, slide):
             height = Inches(SLIDE_HEIGHT_INCHES - 2*SLIDE_SMALL_MARGIN_INCHES
                             - max_image_height_inches - height_margin_inches)
 
+        if column_layout:
+            # Column layout gets the final override if enabled
+            left = Inches(SLIDE_SMALL_MARGIN_INCHES + index*column_width_inches
+                          + index*column_margin_inches)
+            width = Inches(column_width_inches)
+            top = Inches(SLIDE_SMALL_MARGIN_INCHES + images_heights_inches[index] + height_margin_inches)
+            height = Inches(SLIDE_HEIGHT_INCHES - 2*SLIDE_SMALL_MARGIN_INCHES
+                            - images_heights_inches[index] - height_margin_inches)
+
         tx_box = prs_slide.shapes.add_textbox(left, top, width, height)
 
         if debug_slide:
@@ -237,85 +236,29 @@ def generic_slide_fill(prs_slide, slide):
         text_frame = tx_box.text_frame
         text_frame.clear()
         text_frame.vertical_anchor = MSO_VERTICAL_ANCHOR.MIDDLE
+        if column_layout:
+            text_frame.vertical_anchor = MSO_VERTICAL_ANCHOR.TOP
         text_frame.word_wrap = True
         text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
 
-        for text in text_array:
+        for text in text_column:
+            is_title = len(images_array) == 0 and len(text_array) == 1 and len(text_column) == 1
             if debug_logs:
                 print(text)
             p = text_frame.paragraphs[0]
             if p.text == "":
-                if len(text_array) == 1:
+                if is_title:
                     # title-like if only one text
                     p.alignment = PP_PARAGRAPH_ALIGNMENT.CENTER
                     p.font.size = Pt(TITLE_FONT_PT)
                 p.text = text
             else:
                 p = text_frame.add_paragraph()
-                if len(text_array) == 1:
+                if is_title:
                     # title-like if only one text
                     p.alignment = PP_PARAGRAPH_ALIGNMENT.CENTER
                     p.font.size = Pt(TITLE_FONT_PT)
                 p.text = text
-
-
-def slide_fill_column_layout(prs_slide, slide, number_of_images):
-    column_margin_inches = 0.1
-    height_margin_inches = 0.1
-    available_slide_width_inches = SLIDE_WIDTH_INCHES - 2*SLIDE_SMALL_MARGIN_INCHES \
-        - (number_of_images-1)*column_margin_inches
-    column_width_inches = available_slide_width_inches/number_of_images
-    current_img = 0
-    new_image = True
-
-    for slide_data in slide:
-        width = Inches(column_width_inches)
-        img_found = re.search("^img_src:(.*)$", slide_data)
-        if img_found:
-            if debug_logs:
-                print("IMAGE LINK:", img_found.group(1))
-            new_image = True
-            current_img += 1
-            top = Inches(SLIDE_SMALL_MARGIN_INCHES)
-            left = Inches(SLIDE_SMALL_MARGIN_INCHES + (current_img - 1)*column_width_inches
-                          + (current_img - 1)*column_margin_inches)
-
-            image_req = requests.get(img_found.group(1))
-            img_bytes = io.BytesIO(image_req.content)
-            img_box = prs_slide.shapes.add_picture(img_bytes, left, top)
-            current_img_height_inches = img_box.height.inches
-
-            # with open("test.jpg", 'wb') as out:
-            #     out.write(img_bytes.read())
-        else:
-            if debug_logs:
-                print(slide_data)
-            if new_image:
-                new_image = False
-                left = Inches(SLIDE_SMALL_MARGIN_INCHES + (current_img - 1)*column_width_inches
-                              + (current_img - 1)*column_margin_inches)
-                top = Inches(SLIDE_SMALL_MARGIN_INCHES + current_img_height_inches + height_margin_inches)
-                height = Inches(SLIDE_HEIGHT_INCHES - 2*SLIDE_SMALL_MARGIN_INCHES
-                                - current_img_height_inches - height_margin_inches)
-
-                tx_box = prs_slide.shapes.add_textbox(left, top, width, height)
-
-                if debug_slide:
-                    fill = tx_box.fill
-                    fill.solid()
-                    fill.fore_color.rgb = RGBColor(255, 0, 0)
-
-                text_frame = tx_box.text_frame
-                text_frame.clear()
-                text_frame.vertical_anchor = MSO_VERTICAL_ANCHOR.TOP
-                text_frame.word_wrap = True
-                text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
-
-                p = text_frame.paragraphs[0]
-                p.text = slide_data
-            else:
-                p = text_frame.add_paragraph()
-                p.text = slide_data
 
 
 # html_to_pptx("", "")

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
+import http.server
 import io
 import re
 import requests
+import urllib.parse
 from bs4 import BeautifulSoup
 from pptx import Presentation
 from pptx.dml.color import RGBColor
@@ -26,7 +28,8 @@ def html_to_pptx(url, css_selector):
     r = requests.get(url)
     url_string = r.text
     slides = html_to_slides(url_string, css_selector)
-    slides_to_pptx(slides)
+    prs_bytes_stream = slides_to_pptx(slides)
+    return prs_bytes_stream
 
 
 def html_to_slides(html_string, css_selector):
@@ -101,7 +104,14 @@ def slides_to_pptx(slides):
         fill_slide(prs, slide)
         if debug_logs:
             print("============================================ END SLIDE ============================================")
-    prs.save('test.pptx')
+    prs_bytes_stream = io.BytesIO()
+    prs.save(prs_bytes_stream)
+
+    # Test to save bytes stream directly to file
+    # Uncomment if needed
+    # with open("test.pptx", 'wb') as out:
+    #     out.write(prs_bytes_stream.getvalue())
+    return prs_bytes_stream
 
 
 def fill_slide(prs, slide):
@@ -302,4 +312,55 @@ def fill_slide(prs, slide):
                 paragraph.text = text
 
 
-# html_to_pptx("", "")
+class Html2pptx(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Handle GET requests
+
+        # Set headers
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+
+        # Send index.html page
+        with open("index.html", 'rb') as out:
+            self.wfile.write(out.read())
+
+    def do_POST(self):
+        # Handle POST requests
+
+        # Retrieve and decode POST query data
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length)
+        decoded_post_data = urllib.parse.parse_qs(post_data.decode("utf-8"))
+        if debug_logs:
+            print("decoded_post_data[\"url\"][0]", decoded_post_data["url"][0])
+            print("decoded_post_data[\"selector\"][0]", decoded_post_data["selector"][0])
+
+        # Translate HTML to PPTX, retrieves presentation bytes stream
+        prs_bytes_stream = html_to_pptx(decoded_post_data["url"][0], decoded_post_data["selector"][0])
+
+        # Set headers to download the PPTX file
+        self.send_response(200)
+        self.send_header("Content-Type", 'application/octet-stream')
+        self.send_header("Content-Disposition", 'attachment; filename="presentation.pptx"')
+        # This is some unused example code which uses content-length header when transferring a file
+        # Since it seems to work here, we won't use it, but the code below will stay
+        # here in case we need to use and modify it
+        # Source:
+        # https://stackoverflow.com/questions/18543640/how-would-i-create-a-python-web-server-that-downloads-a-file-on-any-get-request
+        # fs = os.fstat(f.fileno())
+        # self.send_header("Content-Length", str(fs.st_size))
+        self.end_headers()
+
+        # Send the PPTX presentation
+        # Use getvalue() instead of read() with BytesIO to avoid problems
+        # Source:
+        # https://stackoverflow.com/questions/46981529/why-does-saving-a-presentation-to-a-file-like-object-produce-a-blank-presentatio?noredirect=1&lq=1
+        self.wfile.write(prs_bytes_stream.getvalue())
+
+
+PORT = 8080
+server_address = ("", PORT)
+httpd = http.server.HTTPServer(server_address, Html2pptx)
+print("serving at port", PORT)
+httpd.serve_forever()

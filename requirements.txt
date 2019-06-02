@@ -4,7 +4,6 @@ chardet==3.0.4
 idna==2.8
 lxml==4.3.3
 Pillow==6.0.0
-pkg-resources==0.0.0
 python-pptx==0.6.18
 requests==2.22.0
 soupsieve==1.9.1
